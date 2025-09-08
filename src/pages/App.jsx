@@ -1,18 +1,12 @@
 // src/pages/App.jsx
-import React, { useEffect, useState } from 'react'
-import Nav from '../components/nav.jsx'
-import Browse from './Browse'
+import React, { useState } from 'react'
+import Nav from '../components/Nav.jsx'
+import Browse from './Browse.jsx'
 import HostRide from './HostRide.jsx'
-import Profile from './Profile'
-import { ensureTempUser } from '../lib/api'
+import Profile from './Profile.jsx'
 
 export default function App() {
   const [tab, setTab] = useState('browse')
-
-  useEffect(() => {
-    ensureTempUser()
-  }, [])
-
   return (
     <div className="max-w-3xl mx-auto">
       <Nav tab={tab} setTab={setTab} />

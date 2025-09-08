@@ -1,49 +1,103 @@
 // src/lib/api.js
-import { getIdToken } from './auth'
+import { idToken } from "./auth";
 
-const baseURL = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8002'
+// Trim trailing "/" to avoid //api/...
+const BASE = (import.meta.env.VITE_API_BASE || "http://127.0.0.1:8002").replace(/\/$/, "");
 
-async function authHeaders() {
-  const headers = { 'Content-Type': 'application/json' }
-  const token = await getIdToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  return headers
+async function request(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
+  const token  = await idToken().catch(() => null);
+
+  const headers = {
+    ...(opts.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  // Only set Content-Type when sending a JSON body
+  const hasBody = method === "POST" || method === "PUT" || method === "PATCH";
+  if (hasBody) headers["Content-Type"] = "application/json";
+
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...opts,
+      headers,
+      mode: "cors",
+      credentials: "omit", // rely on Bearer, not cookies
+    });
+  } catch {
+    throw new Error("Network error. Is the backend running and VITE_API_BASE correct?");
+  }
+
+  const text = await res.text();
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  }
+
+  if (!res.ok) {
+    const msg = data?.detail || data?.message || data?.error || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+
+  return data;
 }
 
-export async function apiGet(path) {
-  const r = await fetch(baseURL + path, { headers: await authHeaders() })
-  if (!r.ok) throw new Error(await r.text())
-  return r.json()
+const get   = (p)       => request(p, { method: "GET" });
+const post  = (p, body) => request(p, { method: "POST",  body: JSON.stringify(body) });
+const patch = (p, body) => request(p, { method: "PATCH", body: JSON.stringify(body) });
+const del   = (p)       => request(p, { method: "DELETE" });
+
+// ---------------- Users ----------------
+async function me() { return get(`/api/users/me`); }
+
+async function updateUser(userId, payload) {
+  try { return await patch(`/api/users/${userId}`, payload); }
+  catch (e) {
+    if (/404|405|not\s+allowed|not\s+found/i.test(e.message || "")) {
+      return await patch(`/api/users/me`, payload);
+    }
+    throw e;
+  }
 }
 
-export async function apiPost(path, body) {
-  const r = await fetch(baseURL + path, {
-    method: 'POST',
-    headers: await authHeaders(),
-    body: JSON.stringify(body),
-  })
-  if (!r.ok) throw new Error(await r.text())
-  return r.json()
-}
+// ---------------- Vehicles --------------
+async function listVehicles()            { return get(`/api/vehicles`); }
+async function createVehicle(payload)    { return post(`/api/vehicles`, payload); }
+// NEW: preferred upsert endpoint; Profile.jsx will fall back to createVehicle if this 404s
+async function saveVehicle(payload)      { return post(`/api/vehicles/upsert`, payload); }
 
-export async function apiPatch(path, body) {
-  const r = await fetch(baseURL + path, {
-    method: 'PATCH',
-    headers: await authHeaders(),
-    body: JSON.stringify(body),
-  })
-  if (!r.ok) throw new Error(await r.text())
-  return r.json()
-}
+// ---------------- Rides -----------------
+async function listRides()               { return get(`/api/rides`); }
+async function createRide(payload)       { return post(`/api/rides`, payload); }
 
-export const api = {
-  health: () => apiGet('/api/health'),
-  me: () => apiGet('/api/users/me'),
-  users: () => apiGet('/api/users'),
-  updateMe: (id, data) => apiPatch(`/api/users/${id}`, data),
-  vehicles: () => apiGet('/api/vehicles'),
-  createVehicle: (data) => apiPost('/api/vehicles', data),
-  rides: () => apiGet('/api/rides'),
-  createRide: (data) => apiPost('/api/rides', data),
-  reserve: (ride_id) => apiPost('/api/reservations', { ride_id }),
-}
+// ---------------- Reservations ----------
+async function reserve(ride_id)          { return post(`/api/reservations`, { ride_id }); }
+
+const api = {
+  health: () => get(`/api/health`),
+
+  me,
+  updateUser,
+  user: me,
+
+  listVehicles,
+  createVehicle,
+  saveVehicle,     // <— export it
+  vehicles: listVehicles,
+
+  listRides,
+  createRide,
+  rides: listRides,
+
+  reserve,
+};
+
+export default api;
+export {
+  api,
+  me, updateUser,
+  listVehicles, createVehicle, saveVehicle,
+  listRides, createRide,
+  reserve
+};
