@@ -4,5 +4,5 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   // IMPORTANT: this must match the repo name exactly (case-sensitive)
-  base: "/UB-Badminton-Club-Rideshare.github.io/",
+  base: "/badminton-frontend/",
 });
