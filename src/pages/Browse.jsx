@@ -91,10 +91,16 @@ export default function Browse() {
     return () => unsub();
   }, []);
 
-  const sorted = useMemo(
-    () => [...rides].sort((a, b) => new Date(a.departure_time) - new Date(b.departure_time)),
-    [rides]
-  );
+
+  const sorted = useMemo(() => {
+    const now = Date.now();
+    // keep only upcoming rides (1 minute grace to avoid flapping on clock skews)
+    const upcoming = rides.filter(r => {
+        const t = Date.parse(r.departure_time);
+        return Number.isFinite(t) ? t >= now - 60_000 : true;
+    });
+    return upcoming.sort((a, b) => new Date(a.departure_time) - new Date(b.departure_time));
+    }, [rides]);
 
   async function onReserve(id) {
     if (!auth.currentUser) { setBanner("Please sign in to reserve a seat."); return; }
