@@ -1,6 +1,7 @@
 // src/lib/api.js
 import { idToken } from "./auth";
 
+// Trim trailing "/" to avoid //api/...
 const BASE = (import.meta.env.VITE_API_BASE || "http://127.0.0.1:8002").replace(/\/$/, "");
 
 async function request(path, opts = {}) {
@@ -12,7 +13,7 @@ async function request(path, opts = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  if (["POST","PUT","PATCH"].includes(method)) headers["Content-Type"] = "application/json";
+  if (["POST", "PUT", "PATCH"].includes(method)) headers["Content-Type"] = "application/json";
 
   let res;
   try {
@@ -50,9 +51,9 @@ const updateUser = async (userId, payload) => {
 };
 
 // Vehicles
-const listVehicles   = () => get(`/api/vehicles`);
-const createVehicle  = (payload) => post(`/api/vehicles`, payload);
-const saveVehicle    = async (payload) => {
+const listVehicles  = () => get(`/api/vehicles`);
+const createVehicle = (payload) => post(`/api/vehicles`, payload);
+const saveVehicle   = async (payload) => {
   try { return await post(`/api/vehicles/upsert`, payload); }
   catch (e) {
     if (/404|405/i.test(e.message || "")) return await post(`/api/vehicles`, payload);
@@ -61,13 +62,14 @@ const saveVehicle    = async (payload) => {
 };
 
 // Rides
-const listRides  = () => get(`/api/rides`);
-const createRide = (payload) => post(`/api/rides`, payload);
+const listRides   = () => get(`/api/rides`);
+const createRide  = (payload) => post(`/api/rides`, payload);
+const deleteRide  = (ride_id) => del(`/api/rides/${ride_id}`);
 
 // Reservations
-const reserve            = (ride_id) => post(`/api/reservations`, { ride_id });
-const myReservations     = () => get(`/api/reservations/me`);
-const cancelReservation  = (ride_id) => del(`/api/reservations/${ride_id}`);
+const reserve           = (ride_id) => post(`/api/reservations`, { ride_id });
+const myReservations    = () => get(`/api/reservations/me`);
+const cancelReservation = (ride_id) => del(`/api/reservations/${ride_id}`);
 
 export default {
   health: () => get(`/api/health`),
@@ -76,7 +78,7 @@ export default {
 
   listVehicles, createVehicle, saveVehicle,
 
-  listRides, createRide,
+  listRides, createRide, deleteRide,
 
   reserve, myReservations, cancelReservation,
 };
