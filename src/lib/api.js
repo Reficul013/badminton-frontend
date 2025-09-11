@@ -13,9 +13,9 @@ async function request(path, opts = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  // Only set Content-Type when sending a JSON body
-  const hasBody = method === "POST" || method === "PUT" || method === "PATCH";
-  if (hasBody) headers["Content-Type"] = "application/json";
+  // Only set Content-Type when sending JSON
+  const hasBody = ["POST","PUT","PATCH"].includes(method);
+  if (hasBody && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
 
   let res;
   try {
@@ -23,19 +23,20 @@ async function request(path, opts = {}) {
       ...opts,
       headers,
       mode: "cors",
-      credentials: "omit", // rely on Bearer, not cookies
+      credentials: "omit", // use Bearer
     });
   } catch {
-    throw new Error("Network error. Is the backend running and VITE_API_BASE correct?");
+    throw new Error("Network error. Please check your connection.");
   }
 
   const text = await res.text();
   let data = null;
-  if (text) {
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  }
+  if (text) { try { data = JSON.parse(text); } catch { data = { raw: text }; } }
 
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("Please sign in to continue.");
+    }
     const msg = data?.detail || data?.message || data?.error || `HTTP ${res.status}`;
     throw new Error(msg);
   }
@@ -46,11 +47,11 @@ async function request(path, opts = {}) {
 const get   = (p)       => request(p, { method: "GET" });
 const post  = (p, body) => request(p, { method: "POST",  body: JSON.stringify(body) });
 const patch = (p, body) => request(p, { method: "PATCH", body: JSON.stringify(body) });
+const put   = (p, body) => request(p, { method: "PUT",   body: JSON.stringify(body) });
 const del   = (p)       => request(p, { method: "DELETE" });
 
 // ---------------- Users ----------------
 async function me() { return get(`/api/users/me`); }
-
 async function updateUser(userId, payload) {
   try { return await patch(`/api/users/${userId}`, payload); }
   catch (e) {
@@ -62,42 +63,33 @@ async function updateUser(userId, payload) {
 }
 
 // ---------------- Vehicles --------------
-async function listVehicles()            { return get(`/api/vehicles`); }
-async function createVehicle(payload)    { return post(`/api/vehicles`, payload); }
-// NEW: preferred upsert endpoint; Profile.jsx will fall back to createVehicle if this 404s
-async function saveVehicle(payload)      { return post(`/api/vehicles/upsert`, payload); }
+async function listVehicles()         { return get(`/api/vehicles`); }
+async function myVehicle()            { return get(`/api/vehicles/me`); }
+// Backend POST /api/vehicles is UPSERT (200)
+async function saveVehicle(payload)   { return post(`/api/vehicles`, payload); }
+async function createVehicle(payload) { return post(`/api/vehicles`, payload); }
 
 // ---------------- Rides -----------------
-async function listRides()               { return get(`/api/rides`); }
-async function createRide(payload)       { return post(`/api/rides`, payload); }
+async function listRides()            { return get(`/api/rides`); }
+async function createRide(payload)    { return post(`/api/rides`, payload); }
 
 // ---------------- Reservations ----------
-async function reserve(ride_id)          { return post(`/api/reservations`, { ride_id }); }
+async function reserve(ride_id)             { return post(`/api/reservations`, { ride_id }); }
+async function cancelReservation(rideId)    { return del(`/api/reservations/${rideId}`); }
+async function myReservations()             { return get(`/api/reservations/me`); }
 
-const api = {
+export default {
   health: () => get(`/api/health`),
 
-  me,
-  updateUser,
-  user: me,
-
-  listVehicles,
-  createVehicle,
-  saveVehicle,     // <— export it
-  vehicles: listVehicles,
-
-  listRides,
-  createRide,
-  rides: listRides,
-
-  reserve,
+  me, updateUser,
+  listVehicles, myVehicle, saveVehicle, createVehicle,
+  listRides, createRide,
+  reserve, cancelReservation, myReservations,
 };
 
-export default api;
 export {
-  api,
   me, updateUser,
-  listVehicles, createVehicle, saveVehicle,
+  listVehicles, myVehicle, saveVehicle, createVehicle,
   listRides, createRide,
-  reserve
+  reserve, cancelReservation, myReservations,
 };

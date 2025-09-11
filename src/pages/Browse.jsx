@@ -1,6 +1,8 @@
 // src/pages/Browse.jsx
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
+import { getAuth } from "firebase/auth";
+import { app } from "../lib/firebase";
 
 function fmt(dt) {
   try {
@@ -27,7 +29,6 @@ function Avatar({ url, name }) {
       />
     );
   }
-  // fallback: initials bubble
   const initial = (name || "?").trim().charAt(0).toUpperCase();
   return (
     <div className="w-8 h-8 rounded-full bg-neutral-300 flex items-center justify-center text-sm font-medium">
@@ -39,15 +40,9 @@ function Avatar({ url, name }) {
 function CarImage({ url }) {
   if (url) {
     return (
-      <img
-        src={url}
-        alt="Vehicle"
-        className="w-full h-full object-cover"
-        loading="lazy"
-      />
+      <img src={url} alt="Vehicle" className="w-full h-full object-cover" loading="lazy" />
     );
   }
-  // simple placeholder
   return (
     <div className="w-full h-full flex items-center justify-center text-xs text-neutral-500 bg-neutral-100">
       No car photo
@@ -56,43 +51,67 @@ function CarImage({ url }) {
 }
 
 export default function Browse() {
+  const auth = getAuth(app);
   const [rides, setRides] = useState([]);
+  const [mine, setMine]   = useState(new Set()); // ride_ids I reserved
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
 
-  useEffect(() => {
-    let dead = false;
-    (async () => {
-      setErr("");
-      setLoading(true);
-      try {
-        const list = await api.listRides();
-        if (dead) return;
-        setRides(Array.isArray(list) ? list : []);
-      } catch (e) {
-        if (!dead) setErr(e.message || "Failed to load rides");
-      } finally {
-        if (!dead) setLoading(false);
-      }
-    })();
-    return () => { dead = true; };
-  }, []);
+  const signedIn = !!auth.currentUser;
 
-  const sorted = useMemo(() => {
-    return [...rides].sort(
-      (a, b) => new Date(a.departure_time) - new Date(b.departure_time)
-    );
-  }, [rides]);
-
-  async function onReserve(id) {
+  async function load() {
+    setMsg("");
+    setLoading(true);
     try {
-      await api.reserve(id);
-      alert("Seat reserved!");
-      // refresh list to update seats_taken
       const list = await api.listRides();
       setRides(Array.isArray(list) ? list : []);
+      if (auth.currentUser) {
+        const ids = await api.myReservations();
+        setMine(new Set(ids));
+      } else {
+        setMine(new Set());
+      }
     } catch (e) {
-      alert(e.message || "Reserve failed");
+      setMsg(e.message || "Failed to load rides.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, [signedIn]);
+
+  const sorted = useMemo(
+    () => [...rides].sort((a, b) => new Date(a.departure_time) - new Date(b.departure_time)),
+    [rides]
+  );
+
+  async function onReserve(id) {
+    if (!auth.currentUser) {
+      setMsg("Please sign in to reserve a seat.");
+      return;
+    }
+    try {
+      await api.reserve(id);
+      setMine(prev => new Set(prev).add(id));
+      setRides(rs => rs.map(r => r.id === id ? { ...r, seats_taken: (r.seats_taken ?? 0) + 1 } : r));
+      setMsg("Seat reserved ✓");
+    } catch (e) {
+      setMsg(e.message || "Reserve failed");
+    }
+  }
+
+  async function onCancel(id) {
+    if (!auth.currentUser) {
+      setMsg("Please sign in to manage reservations.");
+      return;
+    }
+    try {
+      await api.cancelReservation(id);
+      setMine(prev => { const n = new Set(prev); n.delete(id); return n; });
+      setRides(rs => rs.map(r => r.id === id ? { ...r, seats_taken: Math.max(0, (r.seats_taken ?? 1) - 1) } : r));
+      setMsg("Reservation canceled ✓");
+    } catch (e) {
+      setMsg(e.message || "Cancel failed");
     }
   }
 
@@ -100,45 +119,36 @@ export default function Browse() {
     <div className="max-w-5xl mx-auto p-6">
       <h2 className="text-xl font-semibold mb-4">Browse</h2>
 
-      {err && <div className="mb-4 text-red-600">Error: {err}</div>}
-      {loading && (
-        <div className="text-neutral-500">Loading rides…</div>
+      {msg && (
+        <div className={`mb-4 ${/✓/.test(msg) ? "text-green-700" : "text-red-600"}`}>
+          {msg}
+        </div>
       )}
 
-      {!loading && sorted.length === 0 && (
-        <div className="text-neutral-600">No rides yet.</div>
-      )}
+      {loading && <div className="text-neutral-500">Loading rides…</div>}
+      {!loading && sorted.length === 0 && <div className="text-neutral-600">No rides yet.</div>}
 
       <div className="flex flex-col gap-4">
         {sorted.map((r) => {
           const seatsLeft = Math.max(0, (r.seats_total ?? 0) - (r.seats_taken ?? 0));
+          const reservedByMe = mine.has(r.id);
           return (
-            <div
-              key={r.id}
-              className="w-full border rounded-xl overflow-hidden shadow-sm"
-            >
+            <div key={r.id} className="w-full border rounded-xl overflow-hidden shadow-sm">
               <div className="grid grid-cols-12 gap-0">
-                {/* Left: vehicle image */}
                 <div className="col-span-12 md:col-span-3 h-40 md:h-44 bg-neutral-100">
                   <CarImage url={r.vehicle_photo_url} />
                 </div>
-
-                {/* Right: details */}
                 <div className="col-span-12 md:col-span-9 p-4">
-                  {/* Host row */}
                   <div className="flex items-center gap-2 mb-2">
                     <Avatar url={r.host_avatar_url} name={r.host_nickname} />
                     <div className="text-sm">
-                      <div className="font-medium">
-                        {r.host_nickname || "Host"}
-                      </div>
+                      <div className="font-medium">{r.host_nickname || "Host"}</div>
                       <div className="text-neutral-500">
                         {r.vehicle_name || "Car"}{r.vehicle_model ? ` · ${r.vehicle_model}` : ""}
                       </div>
                     </div>
                   </div>
 
-                  {/* Ride info */}
                   <div className="grid md:grid-cols-4 gap-2 text-sm">
                     <div>
                       <div className="text-neutral-500">From</div>
@@ -154,34 +164,41 @@ export default function Browse() {
                     </div>
                     <div>
                       <div className="text-neutral-500">Seats</div>
-                      <div className="font-medium">
-                        {r.seats_total} total · {seatsLeft} left
-                      </div>
+                      <div className="font-medium">{r.seats_total} total · {seatsLeft} left</div>
                     </div>
                   </div>
 
-                  {r.notes && (
-                    <div className="mt-2 text-sm text-neutral-700">
-                      {r.notes}
-                    </div>
-                  )}
+                  {r.notes && <div className="mt-2 text-sm text-neutral-700">{r.notes}</div>}
 
-                  {/* Actions */}
-                  <div className="mt-3">
-                    <button
-                      className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-                      onClick={() => onReserve(r.id)}
-                      disabled={seatsLeft <= 0}
-                      title={seatsLeft <= 0 ? "Ride is full" : "Reserve a seat"}
-                    >
-                      {seatsLeft <= 0 ? "Full" : "Reserve"}
-                    </button>
+                  <div className="mt-3 flex gap-2">
+                    {!reservedByMe ? (
+                      <button
+                        className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
+                        onClick={() => onReserve(r.id)}
+                        disabled={seatsLeft <= 0}
+                        title={seatsLeft <= 0 ? "Ride is full" : "Reserve a seat"}
+                      >
+                        {seatsLeft <= 0 ? "Full" : "Reserve"}
+                      </button>
+                    ) : (
+                      <button
+                        className="px-4 py-2 rounded bg-neutral-200 hover:bg-neutral-300"
+                        onClick={() => onCancel(r.id)}
+                      >
+                        Cancel reservation
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
           );
         })}
+      </div>
+
+      {/* Footer notice */}
+      <div className="mt-10 text-xs text-neutral-500 text-center">
+        This app is <b>not affiliated with UB or UB SA</b>.
       </div>
     </div>
   );

@@ -1,0 +1,22 @@
+name: Ping backend (keep warm)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 minutes
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Curl /api/health
+        run: |
+          set -e
+          echo "Pinging: $PING_URL"
+          status=$(curl -s -o /dev/null -w "%{http_code}" "$PING_URL")
+          echo "HTTP $status"
+          test "$status" -ge 200 -a "$status" -lt 500
+        env:
+          # Add this in repo Settings → Secrets and variables → Actions → New repository secret
+          # Example value: https://contemporary-kristel-reficul-dc21fb4c.koyeb.app/api/health
+          PING_URL: ${{ secrets.PING_URL }}
