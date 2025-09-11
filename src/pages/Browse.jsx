@@ -37,44 +37,23 @@ function CarImage({ url }) {
 export default function Browse() {
   const auth = getAuth(app);
 
-  const [rides, setRides]       = useState([]);
-  const [mine, setMine]         = useState(new Set()); // ride ids I reserved
-  const [me, setMe]             = useState(null);      // backend user (id/nick)
-  const [loading, setLoading]   = useState(true);
+  const [rides, setRides]     = useState([]);
+  const [mine, setMine]       = useState(new Set()); // ride ids I reserved
+  const [me, setMe]           = useState(null);      // backend user
+  const [loading, setLoading] = useState(true);
 
-  // Page-level banner (errors / success not specific to a card)
-  const [banner, setBanner]     = useState("");
+  // banner shown only if listRides fails (fatal)
+  const [banner, setBanner]   = useState("");
 
-  // Per-ride inline status text: { [rideId]: "Reserved ✓" | "Cancel failed" | ... }
-  const [statusById, setStatusById] = useState({}); 
+  // ephemeral per-ride flash (e.g., deletion) to avoid one message affecting all cards
+  const [flash, setFlash]     = useState({}); // { [rideId]: "Ride deleted ✓" }
 
-  // helper to show and auto-clear per-card status
-  function showStatus(id, text, ttl = 2500) {
-    setStatusById(prev => ({ ...prev, [id]: text }));
-    if (ttl) {
-      setTimeout(() => {
-        setStatusById(prev => {
-          const { [id]: _omit, ...rest } = prev;
-          return rest;
-        });
-      }, ttl);
-    }
-  }
-
-  async function load() {
-    setBanner("");
-    setLoading(true);
+  // load rides (fatal if it fails)
+  async function loadRides() {
+    setBanner(""); setLoading(true);
     try {
       const list = await api.listRides();
       setRides(Array.isArray(list) ? list : []);
-      if (auth.currentUser) {
-        const [ids, u] = await Promise.all([api.myReservations(), api.me()]);
-        setMine(new Set(ids));
-        setMe(u);
-      } else {
-        setMine(new Set());
-        setMe(null);
-      }
     } catch (e) {
       setBanner(e.message || "Failed to load rides.");
     } finally {
@@ -82,10 +61,33 @@ export default function Browse() {
     }
   }
 
+  // load “optional” authed data (never fatal)
+  async function loadAuthedExtras() {
+    if (!auth.currentUser) {
+      setMine(new Set());
+      setMe(null);
+      return;
+    }
+    try {
+      const [ids, u] = await Promise.all([api.myReservations(), api.me()]);
+      setMine(new Set(ids));
+      setMe(u);
+    } catch (e) {
+      // degrade gracefully; don’t show a banner that suggests the API is down
+      console.warn("Optional authed fetch failed:", e);
+      setMine(new Set());
+      setMe(null);
+    }
+  }
+
   // React to sign-in/out immediately
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, () => load());
-    load(); // initial
+    const unsub = onAuthStateChanged(auth, async () => {
+      await loadRides();
+      await loadAuthedExtras();
+    });
+    // initial
+    (async () => { await loadRides(); await loadAuthedExtras(); })();
     return () => unsub();
   }, []);
 
@@ -100,9 +102,11 @@ export default function Browse() {
       await api.reserve(id);
       setMine(prev => new Set(prev).add(id));
       setRides(rs => rs.map(r => r.id === id ? { ...r, seats_taken: (r.seats_taken ?? 0) + 1 } : r));
-      showStatus(id, "Reserved ✓");
+      setFlash(prev => ({ ...prev, [id]: "Seat reserved ✓" }));
+      setTimeout(() => setFlash(prev => ({ ...prev, [id]: undefined })), 2200);
     } catch (e) {
-      showStatus(id, e.message || "Reserve failed", 3500);
+      setFlash(prev => ({ ...prev, [id]: e.message || "Reserve failed" }));
+      setTimeout(() => setFlash(prev => ({ ...prev, [id]: undefined })), 2600);
     }
   }
 
@@ -112,36 +116,31 @@ export default function Browse() {
       await api.cancelReservation(id);
       setMine(prev => { const n = new Set(prev); n.delete(id); return n; });
       setRides(rs => rs.map(r => r.id === id ? { ...r, seats_taken: Math.max(0, (r.seats_taken ?? 1) - 1) } : r));
-      showStatus(id, "Reservation canceled ✓");
+      setFlash(prev => ({ ...prev, [id]: "Reservation canceled ✓" }));
+      setTimeout(() => setFlash(prev => ({ ...prev, [id]: undefined })), 2200);
     } catch (e) {
-      showStatus(id, e.message || "Cancel failed", 3500);
+      setFlash(prev => ({ ...prev, [id]: e.message || "Cancel failed" }));
+      setTimeout(() => setFlash(prev => ({ ...prev, [id]: undefined })), 2600);
     }
   }
 
-  // Delete uses a page banner; the card disappears so inline text isn’t useful.
-  async function onDelete(ride) {
+  async function onDelete(rideId) {
     if (!auth.currentUser) { setBanner("Please sign in to manage rides."); return; }
-
-    const count = Number(ride.seats_taken || 0);
-    const confirmText =
-      count > 0
-        ? `This ride currently has ${count} reservation${count === 1 ? "" : "s"}.\n` +
-          `Deleting will cancel ALL of them. Are you sure you want to delete this ride?`
-        : "Delete this ride?";
-
-    if (!confirm(confirmText)) return;
+    const idx = rides.findIndex(r => r.id === rideId);
+    const hasReservations = idx >= 0 && (rides[idx].seats_taken ?? 0) > 0;
+    const msg = hasReservations
+      ? "This ride already has reservations. Deleting it will also cancel those seats. Proceed?"
+      : "Delete this ride?";
+    if (!confirm(msg)) return;
 
     try {
-      const res = await api.deleteRide(ride.id); // backend returns JSON
-      setRides(rs => rs.filter(r => r.id !== ride.id));
-      const cancelled = Number(res?.cancelled_reservations || 0);
-      setBanner(
-        cancelled > 0
-          ? `Ride deleted ✓  (${cancelled} reservation${cancelled === 1 ? "" : "s"} cancelled)`
-          : "Ride deleted ✓"
-      );
+      await api.deleteRide(rideId);
+      setRides(rs => rs.filter(r => r.id !== rideId));
+      setFlash(prev => ({ ...prev, [rideId]: "Ride deleted ✓" }));
+      setTimeout(() => setFlash(prev => ({ ...prev, [rideId]: undefined })), 2200);
     } catch (e) {
-      setBanner(e.message || "Delete failed");
+      setFlash(prev => ({ ...prev, [rideId]: e.message || "Delete failed" }));
+      setTimeout(() => setFlash(prev => ({ ...prev, [rideId]: undefined })), 2800);
     }
   }
 
@@ -155,12 +154,8 @@ export default function Browse() {
           </p>
         </div>
 
-        {/* Page-level banner (NEVER render inside each card) */}
         {banner && (
-          <div className={`mb-4 rounded-lg px-3 py-2 text-sm ${
-            /✓/.test(banner) ? "bg-green-50 text-green-700 border border-green-200"
-                             : "bg-red-50 text-red-700 border border-red-200"
-          }`}>
+          <div className="mb-4 rounded-lg px-3 py-2 text-sm bg-red-50 text-red-700 border border-red-200">
             {banner}
           </div>
         )}
@@ -173,7 +168,7 @@ export default function Browse() {
             const seatsLeft    = Math.max(0, (r.seats_total ?? 0) - (r.seats_taken ?? 0));
             const reservedByMe = mine.has(r.id);
             const isHost       = me && r.host_id === me.id;
-            const inlineMsg    = statusById[r.id];
+            const flashMsg     = flash[r.id];
 
             return (
               <div key={r.id} className="w-full border rounded-xl overflow-hidden shadow-sm bg-white">
@@ -195,7 +190,7 @@ export default function Browse() {
                       {isHost && (
                         <button
                           className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 hover:bg-red-100 border border-red-200"
-                          onClick={() => onDelete(r)}
+                          onClick={() => onDelete(r.id)}
                           title="Delete this ride"
                         >
                           Delete
@@ -224,7 +219,15 @@ export default function Browse() {
 
                     {r.notes && <div className="mt-2 text-sm text-neutral-700">{r.notes}</div>}
 
-                    <div className="mt-3 flex items-center gap-3">
+                    {flashMsg && (
+                      <div className={`mt-3 text-sm ${
+                        /✓/.test(flashMsg) ? "text-green-700" : "text-red-600"
+                      }`}>
+                        {flashMsg}
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex gap-2">
                       {!isHost && !reservedByMe && (
                         <button
                           className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
@@ -242,15 +245,6 @@ export default function Browse() {
                         >
                           Cancel reservation
                         </button>
-                      )}
-
-                      {/* Per-card status (only for this ride id) */}
-                      {inlineMsg && (
-                        <span className={`text-sm ${
-                          /✓/.test(inlineMsg) ? "text-green-700" : "text-red-600"
-                        }`}>
-                          {inlineMsg}
-                        </span>
                       )}
                     </div>
                   </div>
