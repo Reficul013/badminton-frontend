@@ -12,13 +12,13 @@ async function request(path, opts = {}) {
     ...(opts.headers || {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
-
-  if (["POST", "PUT", "PATCH"].includes(method)) headers["Content-Type"] = "application/json";
+  if (["POST","PUT","PATCH"].includes(method)) headers["Content-Type"] = "application/json";
 
   let res;
   try {
     res = await fetch(`${BASE}${path}`, { ...opts, headers, mode: "cors", credentials: "omit" });
   } catch {
+    // Only show this banner when the primary list call fails (callers can decide)
     throw new Error("Network error. Is the backend running and VITE_API_BASE correct?");
   }
 
