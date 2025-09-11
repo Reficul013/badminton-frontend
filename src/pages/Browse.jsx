@@ -14,9 +14,7 @@ function fmt(dt) {
 }
 
 function Avatar({ url, name }) {
-  if (url) {
-    return <img src={url} alt={name || "Host"} className="w-8 h-8 rounded-full object-cover" loading="lazy" />;
-  }
+  if (url) return <img src={url} alt={name || "Host"} className="w-8 h-8 rounded-full object-cover" loading="lazy" />;
   const initial = (name || "?").trim().charAt(0).toUpperCase();
   return (
     <div className="w-8 h-8 rounded-full bg-neutral-300 flex items-center justify-center text-sm font-medium">
@@ -36,37 +34,51 @@ function CarImage({ url }) {
 
 export default function Browse() {
   const auth = getAuth(app);
+
   const [rides, setRides]     = useState([]);
   const [mine, setMine]       = useState(new Set()); // ride ids I reserved
   const [me, setMe]           = useState(null);      // backend user (id/nick)
   const [loading, setLoading] = useState(true);
   const [msg, setMsg]         = useState("");
 
+  // Load list, then (optionally) my reservations and user.
   async function load() {
-    setMsg(""); setLoading(true);
+    setLoading(true);
+    setMsg("");
+
+    // 1) Primary call – only this controls the red banner
     try {
       const list = await api.listRides();
       setRides(Array.isArray(list) ? list : []);
-      if (auth.currentUser) {
-        const [ids, u] = await Promise.all([api.myReservations(), api.me()]);
-        setMine(new Set(ids));
-        setMe(u);
-      } else {
-        setMine(new Set());
-        setMe(null);
-      }
     } catch (e) {
+      setRides([]);
       setMsg(e.message || "Failed to load rides.");
-    } finally {
       setLoading(false);
+      return; // don't run secondary calls if list failed
     }
+
+    // 2) Secondary calls – never trigger the red banner
+    if (auth.currentUser) {
+      api.myReservations()
+        .then(ids => setMine(new Set(Array.isArray(ids) ? ids : [])))
+        .catch(() => setMine(new Set()));
+      api.me()
+        .then(u => setMe(u || null))
+        .catch(() => setMe(null));
+    } else {
+      setMine(new Set());
+      setMe(null);
+    }
+
+    setLoading(false);
   }
 
   // React to sign-in/out immediately
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, () => load());
+    let alive = true;
+    const unsub = onAuthStateChanged(auth, () => { if (alive) load(); });
     load(); // initial
-    return () => unsub();
+    return () => { alive = false; unsub(); };
   }, []);
 
   const sorted = useMemo(
@@ -104,6 +116,8 @@ export default function Browse() {
     } catch (e) { setMsg(e.message || "Delete failed"); }
   }
 
+  const isListError = /Network error|Failed to load rides/i.test(msg);
+
   return (
     <div className="min-h-[calc(100vh-80px)] bg-gradient-to-b from-white to-neutral-50">
       <div className="max-w-5xl mx-auto p-6">
@@ -114,11 +128,9 @@ export default function Browse() {
           </p>
         </div>
 
-        {msg && (
-          <div className={`mb-4 rounded-lg px-3 py-2 text-sm ${
-            /✓/.test(msg) ? "bg-green-50 text-green-700 border border-green-200"
-                          : "bg-red-50 text-red-700 border border-red-200"
-          }`}>
+        {/* Only show the red banner when the primary list failed */}
+        {isListError && (
+          <div className="mb-4 rounded-lg px-3 py-2 text-sm bg-red-50 text-red-700 border border-red-200">
             {msg}
           </div>
         )}
@@ -199,6 +211,12 @@ export default function Browse() {
                         >
                           Cancel reservation
                         </button>
+                      )}
+                      {/* Success / info messages (non-fatal) */}
+                      {!isListError && msg && (
+                        <div className={`text-sm ${/✓/.test(msg) ? "text-green-700" : "text-red-600"} self-center`}>
+                          {msg}
+                        </div>
                       )}
                     </div>
                   </div>
